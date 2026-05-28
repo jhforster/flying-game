@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Bruins Pilot Adventure!</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #1e0a3c;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-family: 'Courier New', monospace;
+    }
+    canvas {
+      display: block;
+      /* Scale to fill viewport — canvas ratio is 800:500 (1.6:1).
+         Use min() so it's constrained by whichever dimension is tighter,
+         leaving ~44px for the hint/form below. */
+      width: min(100vw, calc((100vh - 44px) * 1.6));
+      height: auto;
+      border: 3px solid #ffcc44;
+      border-radius: 10px;
+      box-shadow: 0 0 40px rgba(255,204,68,0.5), 0 0 80px rgba(255,204,68,0.15);
+    }
+    #nameForm {
+      display: none;
+      margin-top: 16px;
+      background: rgba(24,8,52,0.97);
+      border: 3px solid #ffcc44;
+      border-radius: 14px;
+      padding: 14px 24px;
+      text-align: center;
+    }
+    #nameForm label {
+      display: block;
+      color: #ffcc44;
+      font-size: 15px;
+      margin-bottom: 10px;
+      letter-spacing: 1px;
+    }
+    #nameInput {
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      padding: 7px 14px;
+      border: 2px solid #ffcc44;
+      border-radius: 8px;
+      background: #0a0020;
+      color: #fff;
+      outline: none;
+      width: 210px;
+      margin-right: 10px;
+    }
+    #nameSubmit {
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      font-weight: bold;
+      padding: 8px 18px;
+      border: none;
+      border-radius: 8px;
+      background: #ffcc44;
+      color: #1e0a3c;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    #nameSubmit:hover { background: #ffe066; }
+    #hint {
+      color: #aabbcc;
+      font-size: 13px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+<canvas id="game" width="800" height="500"></canvas>
+<div id="nameForm">
+  <label>✈ Enter your name for the Hall of Fame! ✈</label>
+  <input id="nameInput" type="text" maxlength="20" placeholder="Your name..." />
+  <button id="nameSubmit">Add Me! ★</button>
+</div>
+<p id="hint">ARROW KEYS / Controller to fly &nbsp;|&nbsp; Avoid enemies &amp; obstacles &nbsp;|&nbsp; 3 Levels</p>
+
+<script>
+'use strict';
+
+const canvas = document.getElementById('game');
+const ctx    = canvas.getContext('2d');
+const W = 800, H = 500;
+const CEIL = 22, FLOOR = 440;
+
+// ── Images ────────────────────────────────────────────────────
+const pilotImg   = new Image(); pilotImg.src = 'pilot.png';
+const victoryImg = new Image(); victoryImg.src = 'victory.jpg';
+let pilotLoaded = false, victoryLoaded = false;
+pilotImg.onload   = () => { pilotLoaded   = true; };
+victoryImg.onload = () => { victoryLoaded = true; };
+
+// ── States ────────────────────────────────────────────────────
+const S = { MENU:0, PLAYING:1, GAMEOVER:2, LEVEL_CLEAR:3, VICTORY:4, PAUSED:5 };
+let state = S.MENU;
+
+// ── Level configs ─────────────────────────────────────────────
+const LEVEL_CFG = [
+  { frames:1800, speed:2.8, maxSpeed:5.0, gapMin:145, gapMax:218,
+    sky:['#6dc0e8','#b2dff7','#d8f0ff'], gnd:['#5cb84a','#4aaa38','#3d9030'],
+    label:'LEVEL  1', sub:'Blue Skies' },
+  { frames:2200, speed:4.0, maxSpeed:6.2, gapMin:124, gapMax:186,
+    sky:['#e8823c','#f5b880','#ffddb0'], gnd:['#c8a254','#b89048','#a07838'],
+    label:'LEVEL  2', sub:'Sunset Chase' },
+  { frames:2600, speed:5.2, maxSpeed:7.5, gapMin:108, gapMax:162,
+    sky:['#2e1a60','#6a44a8','#a870d8'], gnd:['#2a6870','#1e5860','#144850'],
+    label:'LEVEL  3', sub:'Night Flight' },
+];
+
+// ── Hall of Fame ──────────────────────────────────────────────
+const HOF_KEY = 'bruinsPilotHOF';
+function getHOF() { return JSON.parse(localStorage.getItem(HOF_KEY) || '[]'); }
+function saveHOF(name, sc) {
+  const hof = getHOF();
+  hof.push({ name: name.trim().slice(0,20) || 'Ace Pilot',
+             score: Math.floor(sc),
+             date: new Date().toLocaleDateString() });
+  hof.sort((a,b) => b.score - a.score);
+  localStorage.setItem(HOF_KEY, JSON.stringify(hof.slice(0,8)));
+}
+
+// ── Input ─────────────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))
+    e.preventDefault();
+  if (e.code === 'Space') handleStart();
+  if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function handleStart() {
+  if (state === S.MENU)          startGame();
+  else if (state === S.GAMEOVER) startGame();
+  else if (state === S.PAUSED)   togglePause();
+}
+
+function togglePause() {
+  if (state === S.PLAYING)      state = S.PAUSED;
+  else if (state === S.PAUSED)  state = S.PLAYING;
+}
+
+// ── Gamepad ───────────────────────────────────────────────────
+const DEAD = 0.2;
+let gpPrevA = false, gpPrevStart = false;
+function pollGamepad() {
+  const gp = navigator.getGamepads ? navigator.getGamepads()[0] : null;
+  if (!gp) return;
+  const lx = Math.abs(gp.axes[0]) > DEAD ? gp.axes[0] : 0;
+  const ly = Math.abs(gp.axes[1]) > DEAD ? gp.axes[1] : 0;
+  keys['ArrowLeft']  = lx < -DEAD || !!(gp.buttons[14]?.pressed);
+  keys['ArrowRight'] = lx >  DEAD || !!(gp.buttons[15]?.pressed);
+  keys['ArrowUp']    = ly < -DEAD || !!(gp.buttons[12]?.pressed);
+  keys['ArrowDown']  = ly >  DEAD || !!(gp.buttons[13]?.pressed);
+  // A button (0): start / restart / unpause
+  const pressedA = !!(gp.buttons[0]?.pressed);
+  if (pressedA && !gpPrevA) handleStart();
+  gpPrevA = pressedA;
+  // Start button (9): pause toggle during play
+  const pressedStart = !!(gp.buttons[9]?.pressed);
+  if (pressedStart && !gpPrevStart) togglePause();
+  gpPrevStart = pressedStart;
+}
+
+// ── Game variables ────────────────────────────────────────────
+let player, obstacles=[], enemies=[], particles=[], bgClouds=[], treats=[], popups=[];
+let confetti=[], fireworks=[];
+let score=0, frame=0, scrollSpeed=2.8, spawnClock=0, diffClock=0;
+let propAngle=0, hillX=0, treatTimer=0;
+let level=0, levelFrame=0, levelClearTimer=0, victoryTimer=0;
+
+// Pre-populate clouds for title screen
+for (let i=0;i<7;i++) bgClouds.push({
+  x: Math.random()*W, y: CEIL+10+Math.random()*(FLOOR-CEIL-80),
+  r: 28+Math.random()*44, spd: 0.3+Math.random()*0.5, a: 0.55+Math.random()*0.35
+});
+
+// ── Start / Level ─────────────────────────────────────────────
+function startGame() {
+  score=0; propAngle=0;
+  level=0;
+  player = { x:120, y:H/2-28, w:112, h:58, vx:0, vy:0, lives:3, invTimer:0 };
+  bgClouds=[]; for (let i=0;i<7;i++) spawnBgCloud(Math.random()*W);
+  startLevel(0);
+  state = S.PLAYING;
+}
+
+function startLevel(lvl) {
+  level       = lvl;
+  levelFrame  = 0;
+  scrollSpeed = LEVEL_CFG[lvl].speed;
+  diffClock   = 0; spawnClock=0; treatTimer=0;
+  hillX=0; frame=0;
+  obstacles=[]; enemies=[]; particles=[]; treats=[]; popups=[];
+  player.x=120; player.y=H/2-28;
+}
+
+// ── Spawners ──────────────────────────────────────────────────
+function spawnBgCloud(x) {
+  bgClouds.push({ x, y:CEIL+10+Math.random()*(FLOOR-CEIL-80),
+    r:28+Math.random()*44, spd:0.3+Math.random()*0.5, a:0.55+Math.random()*0.35 });
+}
+
+function spawnObstacle() {
+  const cfg = LEVEL_CFG[level];
+  const gap = cfg.gapMin + Math.random()*(cfg.gapMax-cfg.gapMin);
+  const top = CEIL+10+Math.random()*((FLOOR-CEIL)-gap-30);
+  obstacles.push({ x:W+20, w:52, topH:top-CEIL, botY:top+gap, passed:false });
+}
+
+function spawnEnemy() {
+  const t = Math.floor(Math.random()*3);
+  const y = CEIL+40+Math.random()*(FLOOR-CEIL-90);
+  if (t===0) enemies.push({ kind:'cloud', x:W+40, y, w:72, h:46,
+    vx:-(1.4+Math.random()*0.8+level*0.3), vy:(Math.random()-0.5)*1.6 });
+  else if (t===1) enemies.push({ kind:'plane', x:W+40, y, w:72, h:34,
+    vx:-(2+Math.random()+level*0.4),
+    baseY:y, amp:38+Math.random()*42, freq:0.028+Math.random()*0.02, t:0 });
+  else enemies.push({ kind:'star', x:W+40, y, w:38, h:38,
+    vx:-(1.8+Math.random()+level*0.3), vy:(Math.random()-0.5)*2, angle:0 });
+}
+
+function spawnTreat() {
+  treats.push({ x:W+20, y:CEIL+55+Math.random()*(FLOOR-CEIL-110),
+    vx:-(1.4+Math.random()*0.6), bob:Math.random()*Math.PI*2, pulse:Math.random()*Math.PI*2 });
+}
+
+// ── Confetti (victory) ────────────────────────────────────────
+const CONFETTI_COLORS = ['#ff4488','#ffcc44','#44aaff','#44ff88','#ff8844','#cc44ff','#44ffee'];
+function spawnConfetti() {
+  confetti.push({
+    x: Math.random()*W, y: -10,
+    vx: (Math.random()-0.5)*3, vy: 2+Math.random()*2,
+    rot: Math.random()*Math.PI*2, rotSpd: (Math.random()-0.5)*0.2,
+    w: 7+Math.random()*8, h: 5+Math.random()*5,
+    color: CONFETTI_COLORS[Math.floor(Math.random()*CONFETTI_COLORS.length)],
+    life: 200+Math.random()*100, maxLife:300,
+  });
+}
+
+function spawnFirework(x, y) {
+  const colors = ['#ff4488','#ffcc44','#44aaff','#ff8844','#ffffff','#44ff88','#cc44ff'];
+  const col = colors[Math.floor(Math.random()*colors.length)];
+  for (let i=0;i<28;i++) {
+    const a = (Math.PI*2/28)*i + Math.random()*0.3;
+    const sp = 2+Math.random()*5;
+    fireworks.push({ x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-1,
+      life:50+Math.random()*30, maxLife:80, r:2+Math.random()*3,
+      color:col, a:1 });
+  }
+}
+
+// ── Collision ─────────────────────────────────────────────────
+function overlaps(ax,ay,aw,ah, bx,by,bw,bh, pad=10) {
+  return ax+pad<bx+bw-pad && ax+aw-pad>bx+pad
+      && ay+pad<by+bh-pad && ay+ah-pad>by+pad;
+}
+
+// ── Update ────────────────────────────────────────────────────
+let fwTimer = 0;
+function update() {
+  pollGamepad();
+  if (state === S.PAUSED) return;
+
+  if (state === S.LEVEL_CLEAR) {
+    levelClearTimer++;
+    propAngle += 0.18;
+    if (levelClearTimer >= 210) {
+      startLevel(level + 1);
+      state = S.PLAYING;
+    }
+    return;
+  }
+
+  if (state === S.VICTORY) {
+    victoryTimer++;
+    propAngle += 0.12;
+    // spawn confetti
+    for (let i=0;i<4;i++) spawnConfetti();
+    for (const c of confetti) { c.x+=c.vx; c.y+=c.vy; c.rot+=c.rotSpd; c.life--; c.a=c.life/c.maxLife; }
+    confetti = confetti.filter(c=>c.life>0);
+    // fireworks
+    fwTimer++;
+    if (fwTimer >= 70+Math.random()*60) {
+      fwTimer = 0;
+      spawnFirework(100+Math.random()*(W-200), 60+Math.random()*200);
+    }
+    for (const f of fireworks) { f.x+=f.vx; f.y+=f.vy; f.vy+=0.12; f.life--; f.a=f.life/f.maxLife; }
+    fireworks = fireworks.filter(f=>f.life>0);
+    return;
+  }
+
+  if (state !== S.PLAYING) return;
+
+  frame++; levelFrame++;
+  score += 0.055;
+  propAngle += 0.28;
+  hillX = (hillX + scrollSpeed*0.35) % 130;
+
+  // level complete?
+  if (levelFrame >= LEVEL_CFG[level].frames) {
+    if (level >= 2) {
+      state = S.VICTORY;
+      victoryTimer = 0; confetti=[]; fireworks=[]; fwTimer=0;
+      document.getElementById('nameForm').style.display = 'block';
+      document.getElementById('nameInput').focus();
+    } else {
+      state = S.LEVEL_CLEAR;
+      levelClearTimer = 0;
+    }
+    return;
+  }
+
+  diffClock++;
+  if (diffClock % 550 === 0)
+    scrollSpeed = Math.min(scrollSpeed+0.35, LEVEL_CFG[level].maxSpeed);
+
+  // player
+  const spd = 4.8;
+  player.vx = keys['ArrowLeft']  ? -spd*0.75 : keys['ArrowRight'] ? spd*0.75 : 0;
+  player.vy = keys['ArrowUp']    ? -spd       : keys['ArrowDown']  ? spd      : 0;
+  player.x  = Math.max(8, Math.min(W-player.w-8, player.x+player.vx));
+  player.y  = Math.max(CEIL+2, Math.min(FLOOR-player.h-2, player.y+player.vy));
+  if (player.invTimer>0) player.invTimer--;
+
+  // bg clouds
+  for (const c of bgClouds) c.x -= c.spd;
+  bgClouds = bgClouds.filter(c=>c.x>-180);
+  if (Math.random()<0.006) spawnBgCloud(W+60);
+
+  // spawn
+  spawnClock++;
+  const interval = Math.max(65, 155-Math.floor(score/8)-level*10);
+  if (spawnClock>=interval) { spawnClock=0; Math.random()<0.62?spawnObstacle():spawnEnemy(); }
+  if (frame%200===0 && Math.random()<0.55+level*0.1) spawnEnemy();
+
+  // obstacles
+  for (const o of obstacles) {
+    o.x -= scrollSpeed;
+    if (!o.passed && o.x+o.w<player.x) { o.passed=true; score+=6; }
+    if (player.invTimer===0) {
+      if (overlaps(player.x,player.y,player.w,player.h, o.x,CEIL,o.w,o.topH)) hitPlayer();
+      if (overlaps(player.x,player.y,player.w,player.h, o.x,o.botY,o.w,FLOOR-o.botY)) hitPlayer();
+    }
+  }
+  obstacles = obstacles.filter(o=>o.x>-80);
+
+  // enemies
+  for (const e of enemies) {
+    e.x += e.vx;
+    if (e.kind==='cloud') {
+      e.y+=e.vy;
+      if (e.y<CEIL+8) e.vy=Math.abs(e.vy);
+      if (e.y+e.h>FLOOR-8) e.vy=-Math.abs(e.vy);
+    } else if (e.kind==='plane') {
+      e.t+=e.freq;
+      e.y=Math.max(CEIL+8,Math.min(FLOOR-e.h-8, e.baseY+Math.sin(e.t)*e.amp));
+    } else {
+      e.angle+=0.09; e.y+=e.vy;
+      if (e.y<CEIL+8) e.vy=Math.abs(e.vy);
+      if (e.y+e.h>FLOOR-8) e.vy=-Math.abs(e.vy);
+    }
+    if (player.invTimer===0 && overlaps(player.x,player.y,player.w,player.h,e.x,e.y,e.w,e.h)) {
+      burst(e.x+e.w/2,e.y+e.h/2,'#ff8888'); e.x=-999; hitPlayer();
+    }
+  }
+  enemies = enemies.filter(e=>e.x>-120);
+
+  // treats
+  treatTimer++;
+  if (treatTimer>=(player.lives<3?380:620)) { treatTimer=0; if(Math.random()<0.75) spawnTreat(); }
+  const tSz=28;
+  for (const t of treats) {
+    t.x+=t.vx; t.bob+=0.06; t.pulse+=0.09;
+    if (overlaps(player.x,player.y,player.w,player.h, t.x-tSz/2,t.y-tSz/2,tSz,tSz,4)) {
+      player.lives=Math.min(player.lives+1,5);
+      burst(t.x,t.y,'#ff88cc');
+      popups.push({x:t.x,y:t.y-10,text:'+1 \u2665',life:70,maxLife:70});
+      t.x=-999;
+    }
+  }
+  treats = treats.filter(t=>t.x>-60);
+
+  for (const p of popups) { p.y-=1.1; p.life--; }
+  popups = popups.filter(p=>p.life>0);
+
+  for (const p of particles) { p.x+=p.vx; p.y+=p.vy; p.vy+=0.18; p.life--; p.a=p.life/p.maxLife; }
+  particles = particles.filter(p=>p.life>0);
+}
+
+function hitPlayer() {
+  if (player.invTimer>0) return;
+  player.lives--;
+  player.invTimer=110;
+  burst(player.x+player.w/2, player.y+player.h/2, '#ffccaa');
+  if (player.lives<=0) state=S.GAMEOVER;
+}
+
+function burst(x,y,color) {
+  for (let i=0;i<14;i++) {
+    const a=(Math.PI*2/14)*i+Math.random()*0.4, sp=1.8+Math.random()*3.2;
+    particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-1.5,
+      life:28+Math.random()*22,maxLife:50,a:1,r:2.5+Math.random()*4,color});
+  }
+}
+
+// ── Draw helpers ──────────────────────────────────────────────
+function rr(x,y,w,h,r,fill,stroke,lw=2) {
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y);
+  ctx.closePath();
+  if (fill)   { ctx.fillStyle=fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle=stroke; ctx.lineWidth=lw; ctx.stroke(); }
+}
+
+function puffCloud(x,y,r) {
+  ctx.fillStyle='#cce0f0';
+  for (const [dx,dy,sr] of [[0,6,r],[r*.72,8,r*.68],[-r*.62,7,r*.64]])
+    { ctx.beginPath(); ctx.arc(x+dx,y+dy,sr,0,Math.PI*2); ctx.fill(); }
+  ctx.fillStyle='#fff';
+  for (const [dx,dy,sr] of [[0,0,r],[r*.72,2,r*.68],[-r*.62,3,r*.64]])
+    { ctx.beginPath(); ctx.arc(x+dx,y+dy,sr,0,Math.PI*2); ctx.fill(); }
+}
+
+function star5(x,y,r,angle,fill) {
+  ctx.save(); ctx.translate(x,y); ctx.rotate(angle); ctx.beginPath();
+  for (let i=0;i<5;i++) {
+    const a1=(Math.PI*2/5)*i-Math.PI/2, a2=a1+Math.PI/5;
+    i===0?ctx.moveTo(Math.cos(a1)*r,Math.sin(a1)*r):ctx.lineTo(Math.cos(a1)*r,Math.sin(a1)*r);
+    ctx.lineTo(Math.cos(a2)*r*.42,Math.sin(a2)*r*.42);
+  }
+  ctx.closePath(); ctx.fillStyle=fill; ctx.fill();
+  ctx.strokeStyle='#cc9900'; ctx.lineWidth=1.5; ctx.stroke(); ctx.restore();
+}
+
+function heart(x,y,r) {
+  ctx.beginPath(); ctx.moveTo(x,y+r*.3);
+  ctx.bezierCurveTo(x,y-r*.4,x-r*1.2,y-r*.4,x-r*1.2,y+r*.3);
+  ctx.bezierCurveTo(x-r*1.2,y+r,x,y+r*1.6,x,y+r*1.6);
+  ctx.bezierCurveTo(x,y+r*1.6,x+r*1.2,y+r,x+r*1.2,y+r*.3);
+  ctx.bezierCurveTo(x+r*1.2,y-r*.4,x,y-r*.4,x,y+r*.3);
+  ctx.closePath(); ctx.fillStyle='#ff4488'; ctx.fill();
+  ctx.strokeStyle='#cc0055'; ctx.lineWidth=1.5; ctx.stroke();
+}
+
+function drawTreat(t) {
+  const y=t.y+Math.sin(t.bob)*5, glow=10+Math.sin(t.pulse)*6;
+  ctx.save(); ctx.shadowColor='#ff55bb'; ctx.shadowBlur=glow;
+  for (let i=0;i<4;i++) {
+    const a=t.pulse+(Math.PI/2)*i;
+    ctx.beginPath(); ctx.arc(t.x+Math.cos(a)*20,y+Math.sin(a)*20,2.5+Math.sin(t.pulse*2+i),0,Math.PI*2);
+    ctx.fillStyle='#ffccee'; ctx.fill();
+  }
+  ctx.beginPath(); ctx.arc(t.x,y,17,0,Math.PI*2);
+  ctx.fillStyle='rgba(255,220,240,0.7)'; ctx.fill();
+  ctx.shadowBlur=glow*1.5; heart(t.x,y-3,11); ctx.restore();
+}
+
+// ── Draw: plane ───────────────────────────────────────────────
+function drawPlane(x,y,w,h,flash) {
+  if (flash && Math.floor(frame/5)%2===0) return;
+  ctx.save();
+  for (let i=0;i<3;i++) {
+    const age=i*8; ctx.globalAlpha=0.18-i*0.05; ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(x-4-age*2,y+h/2,5+age*0.6,0,Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+  ctx.fillStyle='#ffe055';
+  ctx.beginPath(); ctx.moveTo(x+14,y+h/2-h*.28); ctx.lineTo(x+6,y+h/2-h*.52); ctx.lineTo(x+28,y+h/2-h*.28);
+  ctx.closePath(); ctx.fill(); ctx.strokeStyle='#cc9900'; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x+14,y+h/2+h*.28); ctx.lineTo(x+6,y+h/2+h*.46); ctx.lineTo(x+28,y+h/2+h*.28);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#ffd700';
+  ctx.beginPath(); ctx.moveTo(x+28,y+h/2-h*.28); ctx.lineTo(x+68,y+2); ctx.lineTo(x+84,y+4); ctx.lineTo(x+50,y+h/2-h*.28);
+  ctx.closePath(); ctx.fill(); ctx.strokeStyle='#bb8800'; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x+28,y+h/2+h*.28); ctx.lineTo(x+68,y+h-2); ctx.lineTo(x+84,y+h-4); ctx.lineTo(x+50,y+h/2+h*.28);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  rr(x+10,y+h/2-h*.31,w-26,h*.62,14,'#fffbe0','#ccaa00',2.5);
+  rr(x+16,y+h/2-h*.24,18,h*.2,5,'rgba(255,255,255,0.45)',null);
+  ctx.fillStyle='#ffd030'; ctx.beginPath(); ctx.ellipse(x+w-14,y+h/2,14,10,0,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='#bb8800'; ctx.lineWidth=2; ctx.stroke();
+  const cx=x+52,cy=y+h/2-1,cr=20;
+  ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,cr,0,Math.PI*2); ctx.clip();
+  if (pilotLoaded) ctx.drawImage(pilotImg,cx-cr,cy-cr,cr*2,cr*2);
+  else { ctx.fillStyle='#88ccff'; ctx.fillRect(cx-cr,cy-cr,cr*2,cr*2); }
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(cx,cy,cr,0,Math.PI*2); ctx.strokeStyle='#99ddff'; ctx.lineWidth=3; ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx-6,cy-6,6,0,Math.PI*2); ctx.fillStyle='rgba(255,255,255,0.22)'; ctx.fill();
+  ctx.save(); ctx.translate(x+w-12,y+h/2); ctx.rotate(propAngle);
+  for (let i=0;i<3;i++) {
+    ctx.save(); ctx.rotate((Math.PI*2/3)*i); ctx.fillStyle='#cc6600';
+    ctx.beginPath(); ctx.ellipse(0,-15,5,13,0,0,Math.PI*2); ctx.fill(); ctx.restore();
+  }
+  ctx.beginPath(); ctx.arc(0,0,6,0,Math.PI*2); ctx.fillStyle='#ff9900'; ctx.fill();
+  ctx.strokeStyle='#993300'; ctx.lineWidth=1.5; ctx.stroke(); ctx.restore();
+  ctx.restore();
+}
+
+// ── Draw: obstacles ───────────────────────────────────────────
+function drawPillar(x,w,y1,y2) {
+  rr(x-5,y1-4,w+10,y2-y1+8,6,'#7a5c10','#4a3008',2);
+  rr(x,y1,w,y2-y1,4,'#9b7520',null);
+  rr(x+4,y1+6,9,(y2-y1)-14,3,'rgba(255,255,255,0.12)',null);
+}
+function drawSpike(x,w,tipY,dir) {
+  ctx.fillStyle='#bb8822'; ctx.beginPath(); ctx.moveTo(x,tipY);
+  const pts=[0.15,0.35,0.5,0.65,0.85,1.0], depths=[dir*14,dir*5,dir*18,dir*6,dir*12,0];
+  for (let i=0;i<pts.length;i++) ctx.lineTo(x+w*pts[i],tipY+depths[i]);
+  ctx.closePath(); ctx.fill(); ctx.strokeStyle='#4a3008'; ctx.lineWidth=1.5; ctx.stroke();
+}
+function drawObstacle(o) {
+  if (o.topH>0) { drawPillar(o.x,o.w,CEIL,CEIL+o.topH); drawSpike(o.x,o.w,CEIL+o.topH,1); }
+  if (o.botY<FLOOR) { drawSpike(o.x,o.w,o.botY,-1); drawPillar(o.x,o.w,o.botY,FLOOR); }
+}
+
+// ── Draw: enemies ─────────────────────────────────────────────
+function drawCloud(e) {
+  const cx=e.x+36,cy=e.y+22;
+  ctx.fillStyle='#b8ccd8';
+  for (const [dx,dy,r] of [[0,5,20],[22,5,16],[-18,5,15]])
+    { ctx.beginPath(); ctx.arc(cx+dx,cy+dy,r,0,Math.PI*2); ctx.fill(); }
+  ctx.fillStyle='#dae8f2';
+  for (const [dx,dy,r] of [[0,0,20],[22,1,16],[-18,2,15]])
+    { ctx.beginPath(); ctx.arc(cx+dx,cy+dy,r,0,Math.PI*2); ctx.fill(); }
+  ctx.strokeStyle='#334455'; ctx.lineWidth=2.5;
+  ctx.beginPath(); ctx.moveTo(cx-14,cy-5); ctx.lineTo(cx-5,cy-1); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx+14,cy-5); ctx.lineTo(cx+5,cy-1); ctx.stroke();
+  ctx.fillStyle='#223344';
+  ctx.beginPath(); ctx.arc(cx-9,cy+3,4,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+9,cy+3,4,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(cx-8,cy+13); ctx.lineTo(cx-3,cy+10); ctx.lineTo(cx+3,cy+10); ctx.lineTo(cx+8,cy+13);
+  ctx.strokeStyle='#334455'; ctx.lineWidth=2; ctx.stroke();
+}
+function drawEnemyPlane(e) {
+  ctx.save(); ctx.translate(e.x+e.w,e.y+e.h/2); ctx.scale(-1,1);
+  rr(-62,-13,62,26,8,'#ff6b6b','#cc2200',2); ctx.fillStyle='#ff4444';
+  ctx.beginPath(); ctx.moveTo(-42,-11); ctx.lineTo(-18,-34); ctx.lineTo(-6,-32); ctx.lineTo(-30,-11);
+  ctx.closePath(); ctx.fill(); ctx.strokeStyle='#cc2200'; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-42,11); ctx.lineTo(-18,34); ctx.lineTo(-6,32); ctx.lineTo(-30,11);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(-30,0,11,0,Math.PI*2); ctx.fillStyle='#1a0000'; ctx.fill();
+  ctx.beginPath(); ctx.arc(-30,-1,6,0,Math.PI*2); ctx.fillStyle='#ff3333'; ctx.fill();
+  ctx.fillStyle='#cc2200';
+  ctx.beginPath(); ctx.moveTo(0,-5); ctx.lineTo(14,0); ctx.lineTo(0,5); ctx.closePath(); ctx.fill();
+  ctx.save(); ctx.translate(14,0); ctx.rotate(propAngle*1.6);
+  ctx.fillStyle='#770000'; ctx.fillRect(-2,-13,4,26); ctx.fillRect(-13,-2,26,4);
+  ctx.restore(); ctx.restore();
+}
+function drawEnemy(e) {
+  if (e.kind==='cloud') drawCloud(e);
+  else if (e.kind==='plane') drawEnemyPlane(e);
+  else star5(e.x+e.w/2,e.y+e.h/2,19,e.angle,'#ffdd44');
+}
+
+// ── Draw: background & ground ─────────────────────────────────
+function drawBackground() {
+  const sky = state===S.PLAYING||state===S.LEVEL_CLEAR||state===S.GAMEOVER
+    ? LEVEL_CFG[level].sky : LEVEL_CFG[0].sky;
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,sky[0]); g.addColorStop(0.65,sky[1]); g.addColorStop(1,sky[2]);
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // stars in level 3
+  if (level===2 && (state===S.PLAYING||state===S.GAMEOVER)) {
+    ctx.fillStyle='rgba(255,255,255,0.8)';
+    for (let i=0;i<40;i++) {
+      const sx=(i*137+frame*0.2)%W, sy=(i*73)%(FLOOR-CEIL)+CEIL;
+      const sr=0.8+Math.sin(frame*0.05+i)*0.5;
+      ctx.beginPath(); ctx.arc(sx,sy,sr,0,Math.PI*2); ctx.fill();
+    }
+  }
+
+  for (const c of bgClouds) {
+    ctx.save(); ctx.globalAlpha=c.a*0.38; puffCloud(c.x+180,c.y+20,c.r*0.65); ctx.restore();
+  }
+  for (const c of bgClouds) {
+    ctx.save(); ctx.globalAlpha=c.a*0.82; puffCloud(c.x,c.y,c.r); ctx.restore();
+  }
+}
+
+function drawGround() {
+  const gnd = state===S.PLAYING||state===S.LEVEL_CLEAR||state===S.GAMEOVER
+    ? LEVEL_CFG[level].gnd : LEVEL_CFG[0].gnd;
+  ctx.fillStyle=gnd[0]; ctx.beginPath(); ctx.moveTo(0,FLOOR);
+  for (let x=-hillX;x<W+140;x+=130) {
+    ctx.quadraticCurveTo(x+32,FLOOR-38,x+65,FLOOR);
+    ctx.quadraticCurveTo(x+98,FLOOR+12,x+130,FLOOR);
+  }
+  ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath(); ctx.fill();
+  ctx.fillStyle=gnd[1]; ctx.fillRect(0,FLOOR,W,H-FLOOR);
+  ctx.fillStyle=gnd[2]; ctx.fillRect(0,FLOOR+10,W,6);
+  ctx.fillStyle='#aad4ee'; ctx.fillRect(0,0,W,CEIL);
+  ctx.fillStyle='#88b8d8'; ctx.fillRect(0,CEIL-4,W,4);
+}
+
+// ── Draw: HUD ─────────────────────────────────────────────────
+function drawHUD() {
+  // score
+  ctx.font='bold 19px "Courier New"';
+  ctx.fillStyle='#224'; ctx.fillText(`SCORE: ${Math.floor(score)}`,13,17);
+  ctx.fillStyle='#fff'; ctx.fillText(`SCORE: ${Math.floor(score)}`,12,16);
+  // hearts
+  for (let i=0;i<player.lives;i++) heart(W-26-i*30,10,9);
+  // level badge
+  const cfg=LEVEL_CFG[level];
+  ctx.font='bold 13px "Courier New"';
+  ctx.fillStyle='rgba(0,0,0,0.4)'; ctx.fillRect(W/2-54,4,108,17);
+  ctx.fillStyle=cfg.sky[0]; ctx.fillText(cfg.label,W/2-46,16);
+  // progress bar
+  const prog=levelFrame/cfg.frames;
+  ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillRect(W/2-50,19,100,5);
+  ctx.fillStyle=cfg.sky[0]; ctx.fillRect(W/2-50,19,100*prog,5);
+}
+
+// ── Draw: title ───────────────────────────────────────────────
+function drawTitle() {
+  drawBackground(); drawGround();
+  rr(W/2-230,H/2-135,460,255,22,'rgba(24,8,52,0.88)','#ffcc44',4);
+  ctx.font='bold 44px "Courier New"';
+  ctx.fillStyle='#553300'; ctx.fillText('BRUINS PILOT',W/2-188,H/2-55);
+  ctx.fillStyle='#ffcc44'; ctx.fillText('BRUINS PILOT',W/2-190,H/2-57);
+  ctx.font='bold 20px "Courier New"';
+  ctx.fillStyle='#ffbbdd'; ctx.fillText('A D V E N T U R E !',W/2-118,H/2-23);
+  ctx.font='16px "Courier New"';
+  ctx.fillStyle=Math.sin(Date.now()*0.005)>0?'#fff':'#ffcc44';
+  ctx.fillText('— PRESS SPACE TO FLY —',W/2-150,H/2+20);
+  ctx.font='13px "Courier New"'; ctx.fillStyle='#99bbcc';
+  ctx.fillText('ARROW KEYS to move  |  Avoid everything!',W/2-170,H/2+52);
+  ctx.fillText('Beat all 3 levels to join the Hall of Fame!',W/2-178,H/2+72);
+  ctx.fillText('Collect \u2665 hearts to restore lives',W/2-140,H/2+92);
+  drawPlane(W/2+80,H/2+108,112,58,false);
+}
+
+// ── Draw: level clear ─────────────────────────────────────────
+function drawLevelClear() {
+  drawBackground(); drawGround();
+  const t = levelClearTimer/210;
+  const scale = Math.min(1, t*3);
+  const cfg = LEVEL_CFG[level];
+
+  ctx.save();
+  ctx.globalAlpha=Math.min(1,t*4);
+  ctx.translate(W/2,H/2);
+  ctx.scale(scale,scale);
+
+  rr(-230,-120,460,240,22,'rgba(10,4,30,0.92)',cfg.sky[0],4);
+
+  ctx.font='bold 46px "Courier New"';
+  ctx.fillStyle='#111'; ctx.fillText(cfg.label,-176,10);
+  ctx.fillStyle=cfg.sky[0]; ctx.fillText(cfg.label,-178,8);
+
+  ctx.font='bold 22px "Courier New"';
+  ctx.fillStyle='#ffcc44';
+  ctx.fillText('C O M P L E T E !', -148, 48);
+
+  ctx.font='18px "Courier New"';
+  ctx.fillStyle='#fff';
+  ctx.fillText(`Score so far: ${Math.floor(score)}`, -110, 86);
+
+  ctx.font='13px "Courier New"';
+  ctx.fillStyle='rgba(180,220,255,0.8)';
+  ctx.fillText(`Next: ${LEVEL_CFG[level+1].sub}`, -80, 114);
+
+  ctx.restore();
+
+  // celebrate stars
+  for (let i=0;i<6;i++) {
+    const a=levelClearTimer*0.05+i*(Math.PI*2/6);
+    star5(W/2+Math.cos(a)*180, H/2+Math.sin(a)*80, 14, a*2, cfg.sky[0]);
+  }
+}
+
+// ── Draw: victory ─────────────────────────────────────────────
+function drawVictory() {
+  // deep celebration background
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#1a0040'); g.addColorStop(0.5,'#3a0870'); g.addColorStop(1,'#0a1840');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // confetti
+  for (const c of confetti) {
+    ctx.save(); ctx.globalAlpha=c.a;
+    ctx.translate(c.x+c.w/2,c.y+c.h/2); ctx.rotate(c.rot);
+    ctx.fillStyle=c.color; ctx.fillRect(-c.w/2,-c.h/2,c.w,c.h);
+    ctx.restore();
+  }
+
+  // fireworks
+  for (const f of fireworks) {
+    ctx.save(); ctx.globalAlpha=f.a;
+    ctx.fillStyle=f.color;
+    ctx.beginPath(); ctx.arc(f.x,f.y,f.r,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  const t = Date.now() * 0.003;
+
+  // ── VICTORY! rainbow wave title (top, centered) ───────────────
+  ctx.save();
+  ctx.font = 'bold 58px "Courier New"';
+  ctx.shadowBlur = 20;
+  const letters = 'VICTORY!'.split('');
+  const charW = 56, totalW = letters.length * charW;
+  const startX = (W - totalW) / 2, baseY = 62;
+  for (let i = 0; i < letters.length; i++) {
+    const oy  = Math.sin(t + i * 0.65) * 10;
+    const hue = (t * 50 + i * 45) % 360;
+    ctx.fillStyle   = `hsl(${hue},100%,65%)`;
+    ctx.shadowColor = `hsl(${hue},100%,50%)`;
+    ctx.fillText(letters[i], startX + i * charW, baseY + oy);
+  }
+  ctx.restore();
+
+  // ── Photo — landscape, no rotation, left column ───────────────
+  const px=12, py=82, pw=375, ph=264;
+  if (victoryLoaded) {
+    ctx.save();
+    ctx.shadowColor='#ffcc44'; ctx.shadowBlur=18;
+    rr(px-4,py-4,pw+8,ph+8,14,null,'#ffcc44',3);
+    ctx.shadowBlur=0;
+    ctx.beginPath(); rr(px,py,pw,ph,12,null,null); ctx.clip();
+    ctx.drawImage(victoryImg, px, py, pw, ph);
+    ctx.restore();
+  } else {
+    rr(px,py,pw,ph,12,'#334466','#ffcc44',3);
+  }
+
+  // ── Score ─────────────────────────────────────────────────────
+  const rx = 400, ry = 88;
+  ctx.font='bold 18px "Courier New"';
+  ctx.fillStyle='#223'; ctx.fillText(`FINAL SCORE: ${Math.floor(score)}`, rx+1, ry+1);
+  ctx.fillStyle='#ffcc44'; ctx.fillText(`FINAL SCORE: ${Math.floor(score)}`, rx, ry);
+
+  // ── Hall of Fame panel ────────────────────────────────────────
+  const hox=rx-4, hoy=ry+12, how=W-hox-8, hoh=H-hoy-8;
+  rr(hox, hoy, how, hoh, 14, 'rgba(10,4,30,0.88)', '#ffcc44', 2);
+  ctx.font='bold 15px "Courier New"';
+  ctx.fillStyle='#ffcc44';
+  ctx.fillText('✦  HALL  OF  FAME  ✦', hox+how/2-118, hoy+28);
+  ctx.font='13px "Courier New"';
+  const hof = getHOF();
+  if (hof.length===0) {
+    ctx.fillStyle='#aabbcc';
+    ctx.fillText('No champions yet — be the first!', hox+20, hoy+62);
+  } else {
+    for (let i=0;i<Math.min(hof.length,7);i++) {
+      const entry=hof[i], ey=hoy+54+i*34;
+      const flash = i===0 ? `hsl(${(t*80)%360},100%,70%)` : (i<3?'#ffdd88':'#aabbcc');
+      ctx.fillStyle=flash;
+      ctx.font=i<3?'bold 13px "Courier New"':'12px "Courier New"';
+      ctx.fillText(`${i+1}. ${entry.name}`, hox+14, ey);
+      ctx.fillStyle='#88ccff';
+      ctx.fillText(`${entry.score}`, hox+how-115, ey);
+      ctx.fillStyle='#556677';
+      ctx.font='11px "Courier New"';
+      ctx.fillText(entry.date, hox+how-72, ey);
+    }
+  }
+
+  // ── Orbiting stars ────────────────────────────────────────────
+  for (let i=0;i<8;i++) {
+    const a=victoryTimer*0.03+i*(Math.PI*2/8);
+    star5(W/2+Math.cos(a)*385, H/2+Math.sin(a)*235, 10, a*3, CONFETTI_COLORS[i%CONFETTI_COLORS.length]);
+  }
+}
+
+// ── Draw: game over ───────────────────────────────────────────
+function drawGameOver() {
+  ctx.fillStyle='rgba(16,0,32,0.72)'; ctx.fillRect(0,0,W,H);
+  rr(W/2-210,H/2-120,420,240,22,'rgba(18,0,36,0.94)','#ff4488',4);
+  ctx.font='bold 42px "Courier New"';
+  ctx.fillStyle='#1a001a'; ctx.fillText('GAME OVER!',W/2-156,H/2-44);
+  ctx.fillStyle='#ff6699'; ctx.fillText('GAME OVER!',W/2-158,H/2-46);
+  ctx.font='bold 18px "Courier New"'; ctx.fillStyle='#aabbcc';
+  ctx.fillText(`Level ${level+1}  •  Score: ${Math.floor(score)}`,W/2-120,H/2+5);
+  ctx.font='14px "Courier New"';
+  ctx.fillStyle=Math.sin(Date.now()*0.005)>0?'#fff':'#ffcc44';
+  ctx.fillText('PRESS SPACE TO TRY AGAIN',W/2-155,H/2+52);
+  ctx.font='13px "Courier New"'; ctx.fillStyle='#ff88aa';
+  ctx.fillText('Better luck next time, pilot!',W/2-130,H/2+80);
+}
+
+// ── Draw: pause overlay ───────────────────────────────────────
+function drawPause() {
+  ctx.fillStyle = 'rgba(10,0,24,0.72)';
+  ctx.fillRect(0, 0, W, H);
+  rr(W/2-200, H/2-100, 400, 200, 20, 'rgba(14,4,36,0.96)', '#88aaff', 3);
+  ctx.font = 'bold 52px "Courier New"';
+  ctx.fillStyle = '#1a1040';
+  ctx.fillText('PAUSED', W/2-140, H/2-14);
+  ctx.fillStyle = '#aaccff';
+  ctx.fillText('PAUSED', W/2-142, H/2-16);
+  ctx.font = '15px "Courier New"';
+  ctx.fillStyle = '#8899bb';
+  ctx.fillText('P / ESC / Start  to resume', W/2-130, H/2+32);
+  ctx.fillText(`Level ${level+1}  •  Score: ${Math.floor(score)}`, W/2-110, H/2+62);
+}
+
+// ── Render ────────────────────────────────────────────────────
+function render() {
+  ctx.clearRect(0,0,W,H);
+
+  if (state===S.MENU)        { drawTitle(); return; }
+  if (state===S.VICTORY)     { drawVictory(); return; }
+  if (state===S.LEVEL_CLEAR) { drawLevelClear(); return; }
+
+  drawBackground();
+  for (const o of obstacles) drawObstacle(o);
+  for (const e of enemies)   drawEnemy(e);
+  for (const p of particles) {
+    ctx.save(); ctx.globalAlpha=p.a; ctx.fillStyle=p.color;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill(); ctx.restore();
+  }
+  for (const t of treats) drawTreat(t);
+
+  if (state!==S.GAMEOVER) {
+    drawPlane(player.x,player.y,player.w,player.h,player.invTimer>0);
+  } else {
+    drawPlane(player.x,player.y,player.w,player.h,false);
+  }
+
+  for (const p of popups) {
+    ctx.save(); ctx.globalAlpha=p.life/p.maxLife;
+    ctx.font='bold 20px "Courier New"'; ctx.fillStyle='#ff44aa';
+    ctx.strokeStyle='#550022'; ctx.lineWidth=3;
+    ctx.strokeText(p.text,p.x-20,p.y); ctx.fillText(p.text,p.x-20,p.y);
+    ctx.restore();
+  }
+  drawGround();
+  drawHUD();
+  if (state===S.GAMEOVER) drawGameOver();
+  if (state===S.PAUSED)   drawPause();
+}
+
+// ── Name form ─────────────────────────────────────────────────
+document.getElementById('nameSubmit').addEventListener('click', () => {
+  const name = document.getElementById('nameInput').value.trim();
+  if (!name) return;
+  saveHOF(name, score);
+  document.getElementById('nameInput').value = '';
+  document.getElementById('nameForm').style.display = 'none';
+});
+document.getElementById('nameInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('nameSubmit').click();
+});
+
+// ── Loop ──────────────────────────────────────────────────────
+function loop() { update(); render(); requestAnimationFrame(loop); }
+loop();
+</script>
+</body>
+</html>

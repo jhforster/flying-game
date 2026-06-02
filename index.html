@@ -208,6 +208,18 @@ const W = 800, H = 500;
 const CEIL = 22, FLOOR = 440;
 const coarsePointer = window.matchMedia('(hover: none), (pointer: coarse), (max-width: 760px)');
 const isTouchUI = () => coarsePointer.matches;
+let dpr = 1;
+
+function syncCanvasResolution() {
+  dpr = Math.min(window.devicePixelRatio || 1, 3);
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+}
+syncCanvasResolution();
+window.addEventListener('resize', syncCanvasResolution);
 
 // ── Images ────────────────────────────────────────────────────
 const pilotImg   = new Image(); pilotImg.src = 'pilot.png';
@@ -643,9 +655,15 @@ function drawPlane(x,y,w,h,flash) {
   ctx.strokeStyle='#bb8800'; ctx.lineWidth=2; ctx.stroke();
   const cx=x+52,cy=y+h/2-1,cr=20;
   ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,cr,0,Math.PI*2); ctx.clip();
+  const avatarBg=ctx.createLinearGradient(cx,cy-cr,cx,cy+cr);
+  avatarBg.addColorStop(0,'#e8f7ff');
+  avatarBg.addColorStop(1,'#86c9ee');
+  ctx.fillStyle=avatarBg;
+  ctx.fillRect(cx-cr,cy-cr,cr*2,cr*2);
   if (pilotLoaded) ctx.drawImage(pilotImg,cx-cr,cy-cr,cr*2,cr*2);
   else { ctx.fillStyle='#88ccff'; ctx.fillRect(cx-cr,cy-cr,cr*2,cr*2); }
   ctx.restore();
+  ctx.beginPath(); ctx.arc(cx,cy,cr+1,0,Math.PI*2); ctx.strokeStyle='#ffffff'; ctx.lineWidth=2; ctx.stroke();
   ctx.beginPath(); ctx.arc(cx,cy,cr,0,Math.PI*2); ctx.strokeStyle='#99ddff'; ctx.lineWidth=3; ctx.stroke();
   ctx.beginPath(); ctx.arc(cx-6,cy-6,6,0,Math.PI*2); ctx.fillStyle='rgba(255,255,255,0.22)'; ctx.fill();
   ctx.save(); ctx.translate(x+w-12,y+h/2); ctx.rotate(propAngle);
@@ -778,20 +796,23 @@ function drawHUD() {
 function drawTitle() {
   drawBackground(); drawGround();
   rr(W/2-230,H/2-135,460,255,22,'rgba(24,8,52,0.88)','#ffcc44',4);
+  ctx.save();
+  ctx.textAlign='center';
   ctx.font='bold 44px "Courier New"';
-  ctx.fillStyle='#553300'; ctx.fillText('BRUINS PILOT',W/2-188,H/2-55);
-  ctx.fillStyle='#ffcc44'; ctx.fillText('BRUINS PILOT',W/2-190,H/2-57);
+  ctx.fillStyle='#553300'; ctx.fillText('BRUINS PILOT',W/2+2,H/2-55);
+  ctx.fillStyle='#ffcc44'; ctx.fillText('BRUINS PILOT',W/2,H/2-57);
   ctx.font='bold 20px "Courier New"';
-  ctx.fillStyle='#ffbbdd'; ctx.fillText('A D V E N T U R E !',W/2-118,H/2-23);
+  ctx.fillStyle='#ffbbdd'; ctx.fillText('A D V E N T U R E !',W/2,H/2-23);
   ctx.font='16px "Courier New"';
   ctx.fillStyle=Math.sin(Date.now()*0.005)>0?'#fff':'#ffcc44';
   const startPrompt = isTouchUI() ? '— TAP START TO FLY —' : '— PRESS SPACE TO FLY —';
-  ctx.fillText(startPrompt,W/2-150,H/2+20);
+  ctx.fillText(startPrompt,W/2,H/2+20);
   ctx.font='13px "Courier New"'; ctx.fillStyle='#99bbcc';
   const movePrompt = isTouchUI() ? 'TOUCH CONTROLS to move  |  Avoid everything!' : 'ARROW KEYS to move  |  Avoid everything!';
-  ctx.fillText(movePrompt,W/2-170,H/2+52);
-  ctx.fillText('Beat all 3 levels to join the Hall of Fame!',W/2-178,H/2+72);
-  ctx.fillText('Collect \u2665 hearts to restore lives',W/2-140,H/2+92);
+  ctx.fillText(movePrompt,W/2,H/2+52);
+  ctx.fillText('Beat all 3 levels to join the Hall of Fame!',W/2,H/2+72);
+  ctx.fillText('Collect \u2665 hearts to restore lives',W/2,H/2+92);
+  ctx.restore();
   drawPlane(W/2+80,H/2+108,112,58,false);
 }
 
@@ -806,24 +827,25 @@ function drawLevelClear() {
   ctx.globalAlpha=Math.min(1,t*4);
   ctx.translate(W/2,H/2);
   ctx.scale(scale,scale);
+  ctx.textAlign='center';
 
   rr(-230,-120,460,240,22,'rgba(10,4,30,0.92)',cfg.sky[0],4);
 
   ctx.font='bold 46px "Courier New"';
-  ctx.fillStyle='#111'; ctx.fillText(cfg.label,-176,10);
-  ctx.fillStyle=cfg.sky[0]; ctx.fillText(cfg.label,-178,8);
+  ctx.fillStyle='#111'; ctx.fillText(cfg.label,2,10);
+  ctx.fillStyle=cfg.sky[0]; ctx.fillText(cfg.label,0,8);
 
   ctx.font='bold 22px "Courier New"';
   ctx.fillStyle='#ffcc44';
-  ctx.fillText('C O M P L E T E !', -148, 48);
+  ctx.fillText('C O M P L E T E !', 0, 48);
 
   ctx.font='18px "Courier New"';
   ctx.fillStyle='#fff';
-  ctx.fillText(`Score so far: ${Math.floor(score)}`, -110, 86);
+  ctx.fillText(`Score so far: ${Math.floor(score)}`, 0, 86);
 
   ctx.font='13px "Courier New"';
   ctx.fillStyle='rgba(180,220,255,0.8)';
-  ctx.fillText(`Next: ${LEVEL_CFG[level+1].sub}`, -80, 114);
+  ctx.fillText(`Next: ${LEVEL_CFG[level+1].sub}`, 0, 114);
 
   ctx.restore();
 
@@ -891,16 +913,23 @@ function drawVictory() {
 
   // ── Score ─────────────────────────────────────────────────────
   const rx = 400, ry = 88;
+  const rightPanelCenter = rx + (W-rx-8)/2;
+  ctx.save();
+  ctx.textAlign='center';
   ctx.font='bold 18px "Courier New"';
-  ctx.fillStyle='#223'; ctx.fillText(`FINAL SCORE: ${Math.floor(score)}`, rx+1, ry+1);
-  ctx.fillStyle='#ffcc44'; ctx.fillText(`FINAL SCORE: ${Math.floor(score)}`, rx, ry);
+  ctx.fillStyle='#223'; ctx.fillText(`FINAL SCORE: ${Math.floor(score)}`, rightPanelCenter+1, ry+1);
+  ctx.fillStyle='#ffcc44'; ctx.fillText(`FINAL SCORE: ${Math.floor(score)}`, rightPanelCenter, ry);
+  ctx.restore();
 
   // ── Hall of Fame panel ────────────────────────────────────────
   const hox=rx-4, hoy=ry+12, how=W-hox-8, hoh=H-hoy-8;
   rr(hox, hoy, how, hoh, 14, 'rgba(10,4,30,0.88)', '#ffcc44', 2);
+  ctx.save();
+  ctx.textAlign='center';
   ctx.font='bold 15px "Courier New"';
   ctx.fillStyle='#ffcc44';
-  ctx.fillText('✦  HALL  OF  FAME  ✦', hox+how/2-118, hoy+28);
+  ctx.fillText('✦  HALL  OF  FAME  ✦', hox+how/2, hoy+28);
+  ctx.restore();
   ctx.font='13px "Courier New"';
   const hof = getHOF();
   if (hof.length===0) {
@@ -932,17 +961,20 @@ function drawVictory() {
 function drawGameOver() {
   ctx.fillStyle='rgba(16,0,32,0.72)'; ctx.fillRect(0,0,W,H);
   rr(W/2-210,H/2-120,420,240,22,'rgba(18,0,36,0.94)','#ff4488',4);
+  ctx.save();
+  ctx.textAlign='center';
   ctx.font='bold 42px "Courier New"';
-  ctx.fillStyle='#1a001a'; ctx.fillText('GAME OVER!',W/2-156,H/2-44);
-  ctx.fillStyle='#ff6699'; ctx.fillText('GAME OVER!',W/2-158,H/2-46);
+  ctx.fillStyle='#1a001a'; ctx.fillText('GAME OVER!',W/2+2,H/2-44);
+  ctx.fillStyle='#ff6699'; ctx.fillText('GAME OVER!',W/2,H/2-46);
   ctx.font='bold 18px "Courier New"'; ctx.fillStyle='#aabbcc';
-  ctx.fillText(`Level ${level+1}  •  Score: ${Math.floor(score)}`,W/2-120,H/2+5);
+  ctx.fillText(`Level ${level+1}  •  Score: ${Math.floor(score)}`,W/2,H/2+5);
   ctx.font='14px "Courier New"';
   ctx.fillStyle=Math.sin(Date.now()*0.005)>0?'#fff':'#ffcc44';
   const retryPrompt = isTouchUI() ? 'TAP START TO TRY AGAIN' : 'PRESS SPACE TO TRY AGAIN';
-  ctx.fillText(retryPrompt,W/2-155,H/2+52);
+  ctx.fillText(retryPrompt,W/2,H/2+52);
   ctx.font='13px "Courier New"'; ctx.fillStyle='#ff88aa';
-  ctx.fillText('Better luck next time, pilot!',W/2-130,H/2+80);
+  ctx.fillText('Better luck next time, pilot!',W/2,H/2+80);
+  ctx.restore();
 }
 
 // ── Draw: pause overlay ───────────────────────────────────────
@@ -950,16 +982,19 @@ function drawPause() {
   ctx.fillStyle = 'rgba(10,0,24,0.72)';
   ctx.fillRect(0, 0, W, H);
   rr(W/2-200, H/2-100, 400, 200, 20, 'rgba(14,4,36,0.96)', '#88aaff', 3);
+  ctx.save();
+  ctx.textAlign='center';
   ctx.font = 'bold 52px "Courier New"';
   ctx.fillStyle = '#1a1040';
-  ctx.fillText('PAUSED', W/2-140, H/2-14);
+  ctx.fillText('PAUSED', W/2+2, H/2-14);
   ctx.fillStyle = '#aaccff';
-  ctx.fillText('PAUSED', W/2-142, H/2-16);
+  ctx.fillText('PAUSED', W/2, H/2-16);
   ctx.font = '15px "Courier New"';
   ctx.fillStyle = '#8899bb';
   const pausePrompt = isTouchUI() ? 'Tap Pause to resume' : 'P / ESC / Start  to resume';
-  ctx.fillText(pausePrompt, W/2-130, H/2+32);
-  ctx.fillText(`Level ${level+1}  •  Score: ${Math.floor(score)}`, W/2-110, H/2+62);
+  ctx.fillText(pausePrompt, W/2, H/2+32);
+  ctx.fillText(`Level ${level+1}  •  Score: ${Math.floor(score)}`, W/2, H/2+62);
+  ctx.restore();
 }
 
 // ── Render ────────────────────────────────────────────────────
